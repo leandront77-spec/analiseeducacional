@@ -1,0 +1,12 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+database/*.db
+
+*.xlsx
+*.xls
+*.csv
+temp_*
