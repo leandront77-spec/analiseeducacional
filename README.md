@@ -1,11 +1,11 @@
 # Painel de Desempenho Escolar
 
-## Situação do projeto
+Sistema local desenvolvido como projeto acadêmico para cadastro, armazenamento e consulta de dados de desempenho escolar.
 
-Protótipo acadêmico em desenvolvimento. Nesta etapa foram implementadas as funcionalidades de cadastro, lançamento, importação e consulta de notas.
-O projeto faz parte da disciplina de Projeto de Software e utiliza uma arquitetura composta por interface, regras de processamento e banco de dados relacional.
+O trabalho tem como foco a modelagem do banco de dados, a organização das funcionalidades e a integração entre uma interface em Streamlit, o processamento em Python e um banco SQLite.
 
 ## Objetivo
+
 
 Facilitar o trabalho de professores e coordenadores pedagógicos no armazenamento e na consulta das notas dos estudantes, permitindo visualizar o boletim completo de cada aluno por turma e período letivo.
 
@@ -112,7 +112,7 @@ Os dados apresentados na demonstração do projeto serão fictícios ou anonimiz
 
 ## Situação do projeto
 
-Primeira versão funcional, contendo banco de dados relacional, cadastro, importação, lançamento e consulta de notas.
+Protótipo acadêmico em desenvolvimento. Nesta etapa foram implementadas as funcionalidades de cadastro, lançamento, importação e consulta de notas.
 
 ## Autor
 
