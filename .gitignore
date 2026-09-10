@@ -10,3 +10,7 @@ database/*.db
 *.xls
 *.csv
 temp_*
+
+# Permite as planilhas fictícias da pasta Dados
+!Dados/
+!Dados/*.xlsx
