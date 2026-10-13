@@ -1,3 +1,4 @@
+import io
 import streamlit as st
 import pandas as pd
 import os
@@ -184,7 +185,7 @@ if menu_principal == "Consulta":
                                                 with col_del:
                                                     st.write("") 
                                                     st.write("")
-                                                    if st.button("🗑️ Excluir", key=f"del_{row['nota_id']}", help=f"Excluir registro de {row['DISCIPLINA']}"):
+                                                    if st.button("Excluir", key=f"del_{row['nota_id']}", help=f"Excluir registro de {row['DISCIPLINA']}"):
                                                         deletar_nota_por_id(row['nota_id'])
                                                         st.warning(f"Registro de {row['DISCIPLINA']} excluído!")
                                                         st.rerun()
@@ -206,7 +207,7 @@ if menu_principal == "Consulta":
         st.info("Nenhum registro encontrado. Cadastre dados para começar.")
 
 # =========================================================================
-# MÓDULO 2: CADASTRO E LANÇAMENTOS (Com 1ª etapa obrigatória de Critérios)
+# MÓDULO 2: CADASTRO E LANÇAMENTOS
 # =========================================================================
 elif menu_principal == "Cadastro":
     sub_cadastro = st.radio(
@@ -225,7 +226,7 @@ elif menu_principal == "Cadastro":
     # ETAPA 1: DEFINIR CRITÉRIOS (OBRIGATÓRIO)
     # ----------------------------------------------------
     if sub_cadastro == "1. Definir Critérios e Limites (Obrigatório)":
-        st.subheader("⚙️ Configuração Obrigatória de Notas Máximas por Critério")
+        st.subheader("Configuração Obrigatória de Notas Máximas por Critério")
         st.info("Defina o teto máximo de pontuação para cada instrumento de avaliação antes de prosseguir com os lançamentos.")
         
         cfg = st.session_state.params_avaliacao
@@ -249,12 +250,12 @@ elif menu_principal == "Cadastro":
                     "max_trimestral": max_trimestral_input,
                     "configurado": True
                 }
-                st.success("✅ Critérios salvos com sucesso! A nota final será a somatória simples dos instrumentos. Agora você já pode usar os lançamentos.")
+                st.success("Critérios salvos com sucesso! A nota final será a somatória simples dos instrumentos. Agora você já pode usar os lançamentos.")
 
         if st.session_state.params_avaliacao["configurado"]:
             st.success("Status: Critérios configurados e ativos no sistema.")
         else:
-            st.warning("⚠️ Você precisa salvar os critérios pelo menos uma vez antes de validar os lançamentos.")
+            st.warning("Você precisa salvar os critérios pelo menos uma vez antes de validar os lançamentos.")
 
     # ----------------------------------------------------
     # ETAPA 2: IMPORTAR PLANILHA EM LOTE (COM DETECÇÃO DE DUPLICIDADE)
@@ -266,26 +267,23 @@ elif menu_principal == "Cadastro":
         arquivo_enviado = st.file_uploader("Selecione o arquivo Excel (.xlsx)", type=["xlsx"])
         
         if arquivo_enviado is not None:
-            if st.button("🔍 Pré-analisar Planilha"):
+            if st.button("Pré-analisar Planilha"):
                 try:
                     nome_turma = os.path.splitext(arquivo_enviado.name)[0].replace("_", " ").upper()
-                    temp_filename = f"temp_{arquivo_enviado.name}"
                     
-                    with open(temp_filename, "wb") as f:
-                        f.write(arquivo_enviado.getbuffer())
-                    
-                    xls = pd.ExcelFile(temp_filename)
+                    # Leitura segura via BytesIO para evitar WinError 32 no Windows
+                    bytes_data = arquivo_enviado.getvalue()
+                    xls = pd.ExcelFile(io.BytesIO(bytes_data))
                     
                     if not xls.sheet_names:
-                        st.error("❌ O arquivo Excel enviado não possui nenhuma aba (disciplina).")
-                        os.remove(temp_filename)
+                        st.error("O arquivo Excel enviado não possui nenhuma aba (disciplina).")
                         st.stop()
                     
                     registros_validos = []
                     registros_com_erro = []
                     
                     for disciplina in xls.sheet_names:
-                        df = pd.read_excel(temp_filename, sheet_name=disciplina, header=None)
+                        df = pd.read_excel(io.BytesIO(bytes_data), sheet_name=disciplina, header=None)
                         
                         start_row = -1
                         for i in range(len(df)):
@@ -392,9 +390,6 @@ elif menu_principal == "Cadastro":
                             else:
                                 registros_validos.append(registro)
 
-                    if os.path.exists(temp_filename):
-                        os.remove(temp_filename)
-
                     st.session_state.importacao_pendente = {
                         "nome_turma": nome_turma,
                         "periodo": periodo_imp,
@@ -413,12 +408,12 @@ elif menu_principal == "Cadastro":
             df_erros = pendente["df_com_erro"]
             qtd_erros = len(df_erros)
 
-            st.info(f"📊 **Resumo da Pré-análise (Turma: {pendente['nome_turma']} - {pendente['periodo']})**")
+            st.info(f"Resumo da Pré-análise (Turma: {pendente['nome_turma']} - {pendente['periodo']})")
             st.write(f"- Registros sem problemas prontos para importar: **{qtd_validos}**")
             st.write(f"- Registros que precisam de revisão/confirmação (incluindo duplicados): **{qtd_erros}**")
 
             if qtd_erros > 0:
-                st.warning("⚠️ Foram identificados itens com duplicidade ou inconsistência. **Confirme ou ajuste os valores abaixo antes de salvar (se confirmar, os duplicados serão atualizados):**")
+                st.warning("Foram identificados itens com duplicidade ou inconsistência. Confirme ou ajuste os valores abaixo antes de salvar (se confirmar, os duplicados serão atualizados):")
                 
                 df_erros_editado = st.data_editor(
                     df_erros,
@@ -438,12 +433,12 @@ elif menu_principal == "Cadastro":
                 )
             else:
                 df_erros_editado = pd.DataFrame()
-                st.success("✅ Nenhum erro ou duplicidade encontrado! Todos os registros estão perfeitos.")
+                st.success("Nenhum erro ou duplicidade encontrado! Todos os registros estão perfeitos.")
 
             c_confirm, c_cancel = st.columns(2)
             
             with c_confirm:
-                if st.button("✅ Confirmar e Gravar Todos no Banco de Dados", type="primary"):
+                if st.button("Confirmar e Gravar Todos no Banco de Dados", type="primary"):
                     try:
                         todos_para_salvar = list(pendente["registros_validos"])
                         erros_Finais = []
@@ -469,7 +464,7 @@ elif menu_principal == "Cadastro":
                                     })
 
                         if erros_Finais:
-                            st.error("❌ Corrija os erros abaixo antes de salvar:")
+                            st.error("Corrija os erros abaixo antes de salvar:")
                             for err in erros_Finais:
                                 st.warning(err)
                         else:
@@ -513,13 +508,13 @@ elif menu_principal == "Cadastro":
                             conexao.close()
                             
                             st.session_state.importacao_pendente = None
-                            st.success("✅ Planilha importada e gravada no banco de dados com sucesso!")
+                            st.success("Planilha importada e gravada no banco de dados com sucesso!")
                             st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao salvar no banco de dados: {e}")
 
             with c_cancel:
-                if st.button("❌ Cancelar Importação"):
+                if st.button("Cancelar Importação"):
                     st.session_state.importacao_pendente = None
                     st.info("Importação cancelada pelo usuário.")
                     st.rerun()
@@ -577,7 +572,7 @@ elif menu_principal == "Cadastro":
             else:
                 cfg = st.session_state.params_avaliacao
                 st.markdown(f"##### Lançando notas para a turma **{turma_final_lote}** em **{disc_final_lote}**")
-                st.info(f"🛑 **Limites vigentes:** Parcial (0 a {cfg['max_parcial']:.1f}), Diversificada (0 a {cfg['max_diversificada']:.1f}), Trimestral (0 a {cfg['max_trimestral']:.1f}) | Nota Final (0 a 10.0)")
+                st.info(f"Limites vigentes: Parcial (0 a {cfg['max_parcial']:.1f}), Diversificada (0 a {cfg['max_diversificada']:.1f}), Trimestral (0 a {cfg['max_trimestral']:.1f}) | Nota Final (0 a 10.0)")
                 
                 tabela_dados = []
                 for _, al in df_alunos_sala.iterrows():
@@ -646,7 +641,7 @@ elif menu_principal == "Cadastro":
                             dados_processados.append((al_id, p, d, t, final_calc))
                             
                     if erros_validacao:
-                        st.error("❌ Foram encontrados erros de validação nas notas informadas:")
+                        st.error("Foram encontrados erros de validação nas notas informadas:")
                         for err in erros_validacao:
                             st.warning(err)
                         st.info("Nenhuma alteração foi salva devido a valores fora dos limites permitidos.")
@@ -664,7 +659,7 @@ elif menu_principal == "Cadastro":
                             
                         conexao.commit()
                         conexao.close()
-                        st.success(f"✅ Notas da turma {turma_final_lote} validadas e salvas com sucesso!")
+                        st.success(f"Notas da turma {turma_final_lote} validadas e salvas com sucesso!")
 
     # ----------------------------------------------------
     # ETAPA 4: CADASTRO INDIVIDUAL
@@ -785,7 +780,7 @@ elif menu_principal == "Cadastro":
                 else:
                     st.error("Preencha todos os campos obrigatórios corretamente.")
 
-    # --- GERENCIAMENTO DO BANCO DE DADOS (Exclusivo na aba de Cadastro) ---
+    # --- GERENCIAMENTO DO BANCO DE DADOS ---
     st.markdown("---")
     with st.expander("Gerenciamento do Banco de Dados"):
         if "confirmar_limpeza" not in st.session_state:
