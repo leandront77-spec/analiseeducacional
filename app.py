@@ -29,6 +29,7 @@ from controle.db import (
     buscar_turmas_com_resumo,
     contar_alunos_em_comum,
     renomear_ou_unir_turma,
+    buscar_base_analise,
     DB_PATH
 )
 
@@ -62,7 +63,7 @@ if "importacao_pendente" not in st.session_state:
 
 menu_principal = st.radio(
     "Módulo Principal:", 
-    ["Consulta", "Cadastro"], 
+    ["Consulta", "Análises e Gráficos", "Cadastro"], 
     horizontal=True
 )
 
@@ -150,6 +151,62 @@ def calcular_media_final(notas_por_periodo):
     
     return pontos, media, pontos_faltantes, situacao, len(trimestres_restantes) == 0
 
+# Cores dos gráficos (tons de azul e cores neutras, sem verde)
+CORES_GRAFICOS = ["#1f4e79", "#4a90d9", "#9ecae1", "#d9822b", "#7f7f7f", "#a83232", "#6a3d9a", "#c49c00", "#0b2545", "#e0a96d"]
+
+def cores_para(qtd):
+    """Retorna uma lista de cores com a quantidade de séries do gráfico."""
+    return [CORES_GRAFICOS[i % len(CORES_GRAFICOS)] for i in range(qtd)]
+
+def extrair_serie(nome_turma):
+    """Obtém a série a partir do nome da turma (ex: "2 SÉRIE B" -> "2ª SÉRIE")."""
+    m = re.match(r'^\s*(\d+)\s*[ªº°]?\s*(S[ÉE]RIE|ANO)', str(nome_turma), flags=re.IGNORECASE)
+    if m:
+        return f"{m.group(1)}ª {m.group(2).upper()}" if m.group(2).upper() != "ANO" else f"{m.group(1)}º ANO"
+    partes = str(nome_turma).rsplit(" ", 1)
+    return partes[0] if len(partes) > 1 else str(nome_turma)
+
+def centralizar(df, config=None):
+    """
+    Monta o column_config da tabela deixando as colunas numéricas centralizadas.
+    Mantém as configurações já informadas (rótulo, formato) e só acrescenta o alinhamento.
+    """
+    config = dict(config or {})
+    for coluna in df.columns:
+        serie = df[coluna]
+        if pd.api.types.is_numeric_dtype(serie):
+            numerica = True
+        else:
+            texto = serie.dropna().astype(str).str.replace(',', '.').str.strip()
+            numerica = len(texto) > 0 and texto.str.match(r'^[-+]?\d+(\.\d+)?$').all()
+        if not numerica:
+            continue
+        if coluna in config and isinstance(config[coluna], dict):
+            config[coluna] = {**config[coluna], "alignment": "center"}
+        elif pd.api.types.is_float_dtype(serie):
+            formato = "%+.1f" if "Variação" in str(coluna) else "%.1f"
+            config[coluna] = st.column_config.NumberColumn(str(coluna), format=formato, alignment="center")
+        else:
+            config[coluna] = st.column_config.Column(str(coluna), alignment="center")
+    return config
+
+def tabela_centralizada(df, **kwargs):
+    """Exibe a tabela ajustada ao conteúdo e centralizada na tela."""
+    with st.container(horizontal_alignment="center"):
+        st.dataframe(df, **kwargs)
+
+def resumir_notas(df, colunas_grupo, nota_corte):
+    """Agrupa as notas e calcula média, quantidade de alunos e percentual de notas abaixo do corte."""
+    resumo = df.groupby(colunas_grupo).agg(
+        MEDIA=('NOTA_FINAL', 'mean'),
+        ALUNOS=('ALUNO_ID', 'nunique'),
+        NOTAS=('NOTA_FINAL', 'count'),
+        ABAIXO=('NOTA_FINAL', lambda x: (x < nota_corte).sum())
+    ).reset_index()
+    resumo['MEDIA'] = resumo['MEDIA'].round(1)
+    resumo['PERC_ABAIXO'] = (resumo['ABAIXO'] / resumo['NOTAS'] * 100).round(0)
+    return resumo
+
 def processar_valor_celula(valor, campo_nome):
     if pd.isna(valor) or str(valor).strip() == "":
         return 0.0, False, None
@@ -204,13 +261,24 @@ if menu_principal == "Consulta":
                                         'MEDIA_TURMA': 'Média Geral da Turma',
                                         'TOTAL_AVALIADOS': 'Total de Alunos Avaliados'
                                     })
-                                    st.dataframe(df_medias_exibicao, use_container_width=True, hide_index=True, height=altura_tabela(df_medias_exibicao))
+                                    tabela_centralizada(df_medias_exibicao, width="content", hide_index=True, height=altura_tabela(df_medias_exibicao), column_config=centralizar(df_medias_exibicao))
 
                                     
                                     # Alunos com nota abaixo da nota de corte (AC3)
                                     st.markdown("---")
                                     st.markdown("##### Alunos com Nota Abaixo da Média")
-                                    nota_corte = st.number_input("Nota de corte (média mínima):", min_value=0.0, max_value=10.0, value=5.0, step=0.5, format="%.1f")
+                                    nota_corte = st.number_input(
+                                        "Nota de corte geral (vale para todas as disciplinas):",
+                                        min_value=0.0, max_value=10.0,
+                                        value=float(st.session_state.params_avaliacao.get("media_minima", 6.0)),
+                                        step=0.5, format="%.1f",
+                                        help="É um único valor, igual para todas as disciplinas. Não existe uma nota de corte diferente por disciplina."
+                                    )
+                                    st.caption(
+                                        f"A nota de corte é a mesma para todas as disciplinas. Ela é usada de duas formas: "
+                                        f"**(1)** uma disciplina fica abaixo quando a nota final do aluno nela é menor que {nota_corte:.1f}; "
+                                        f"**(2)** a média do aluno é a média de todas as suas disciplinas no trimestre, comparada com {nota_corte:.1f}."
+                                    )
                                     
                                     df_resumo = buscar_resumo_turma(periodo_selecionado, turma_selecionada)
                                     df_abaixo = buscar_alunos_abaixo_media(periodo_selecionado, turma_selecionada, nota_corte)
@@ -224,7 +292,7 @@ if menu_principal == "Consulta":
                                     c_m1, c_m2, c_m3, c_m4 = st.columns(4)
                                     c_m1.metric("Média Geral da Turma", f"{media_geral:.1f}")
                                     c_m2.metric("Total de Alunos", total_alunos)
-                                    c_m3.metric("Alunos com Média Abaixo do Corte", f"{qtd_media_abaixo} ({perc_media_abaixo:.0f}%)")
+                                    c_m3.metric("Alunos com Média Geral Abaixo do Corte", f"{qtd_media_abaixo} ({perc_media_abaixo:.0f}%)")
                                     c_m4.metric("Alunos com 1 ou mais Disciplinas Abaixo", qtd_com_disciplina_abaixo)
                                     
                                     if not df_abaixo.empty:
@@ -236,17 +304,15 @@ if menu_principal == "Consulta":
                                             'DISCIPLINAS': 'Disciplinas Abaixo do Corte',
                                             'MENOR_NOTA': 'Menor Nota'
                                         })
-                                        st.dataframe(
+                                        tabela_centralizada(
                                             df_abaixo_exibicao,
-                                            use_container_width=True,
+                                            width="content",
                                             hide_index=True,
                                             height=altura_tabela(df_abaixo_exibicao),
-                                            column_config={
+                                            column_config=centralizar(df_abaixo_exibicao, {
                                                 "Média do Aluno": st.column_config.NumberColumn("Média do Aluno", format="%.1f"),
                                                 "Menor Nota": st.column_config.NumberColumn("Menor Nota", format="%.1f"),
-                                                "Disciplinas Abaixo do Corte": st.column_config.TextColumn("Disciplinas Abaixo do Corte", width="large"),
-                                            }
-                                        )
+                                            }))
                                     else:
                                         st.success(f"Nenhum aluno com nota abaixo de {nota_corte:.1f} neste período.")
                                 else:
@@ -261,7 +327,14 @@ if menu_principal == "Consulta":
                                 if df_trim.empty or df_trim['PERIODO'].nunique() < 2:
                                     st.warning("É preciso ter notas de pelo menos dois trimestres desta turma para fazer o comparativo. Importe as planilhas dos outros trimestres.")
                                 else:
-                                    nota_corte_comp = st.number_input("Nota de corte (média mínima):", min_value=0.0, max_value=10.0, value=5.0, step=0.5, format="%.1f", key="corte_comp")
+                                    nota_corte_comp = st.number_input(
+                                        "Nota de corte geral (vale para todas as disciplinas):",
+                                        min_value=0.0, max_value=10.0,
+                                        value=float(st.session_state.params_avaliacao.get("media_minima", 6.0)),
+                                        step=0.5, format="%.1f", key="corte_comp",
+                                        help="É um único valor, igual para todas as disciplinas."
+                                    )
+                                    st.caption(f"Aqui a nota de corte é comparada com a média geral de cada aluno no trimestre (média de todas as disciplinas).")
                                     
                                     # Resumo da turma em cada trimestre
                                     df_resumo_trim = buscar_resumo_turma_por_trimestre(turma_selecionada, nota_corte_comp)
@@ -275,7 +348,7 @@ if menu_principal == "Consulta":
                                             f"{linha['MEDIA_GERAL']:.1f}",
                                             variacao
                                         )
-                                        colunas_trim[idx].caption(f"Alunos com média abaixo de {nota_corte_comp:.1f}: **{int(linha['ALUNOS_ABAIXO'])} de {int(linha['TOTAL_ALUNOS'])}**")
+                                        colunas_trim[idx].caption(f"Alunos com média geral abaixo de {nota_corte_comp:.1f}: **{int(linha['ALUNOS_ABAIXO'])} de {int(linha['TOTAL_ALUNOS'])}**")
                                         media_anterior = linha['MEDIA_GERAL']
                                     
                                     # Tabela disciplina x trimestre
@@ -287,7 +360,7 @@ if menu_principal == "Consulta":
                                     
                                     config_colunas = {p: st.column_config.NumberColumn(p, format="%.1f") for p in periodos}
                                     config_colunas['Variação (1º ao último)'] = st.column_config.NumberColumn('Variação (1º ao último)', format="%+.1f")
-                                    st.dataframe(df_pivot_exibicao, use_container_width=True, hide_index=True, height=altura_tabela(df_pivot_exibicao), column_config=config_colunas)
+                                    tabela_centralizada(df_pivot_exibicao, width="content", hide_index=True, height=altura_tabela(df_pivot_exibicao), column_config=centralizar(df_pivot_exibicao, config_colunas))
 
                                     
                                     # Comparativo de um aluno
@@ -315,7 +388,7 @@ if menu_principal == "Consulta":
                                             
                                             config_aluno = {p: st.column_config.NumberColumn(p, format="%.1f") for p in periodos_aluno}
                                             config_aluno['Variação (1º ao último)'] = st.column_config.NumberColumn('Variação (1º ao último)', format="%+.1f")
-                                            st.dataframe(df_aluno_exibicao, use_container_width=True, hide_index=True, height=altura_tabela(df_aluno_exibicao), column_config=config_aluno)
+                                            tabela_centralizada(df_aluno_exibicao, width="content", hide_index=True, height=altura_tabela(df_aluno_exibicao), column_config=centralizar(df_aluno_exibicao, config_aluno))
 
                                         else:
                                             st.warning("Nenhuma nota encontrada para este aluno.")
@@ -345,7 +418,7 @@ if menu_principal == "Consulta":
                                                 'AVALIACAO_TRIMESTRAL': 'Avaliação Trimestral',
                                                 'NOTA_FINAL': 'Nota Final'
                                             })
-                                            st.dataframe(df_exibicao, use_container_width=True, hide_index=True, height=altura_tabela(df_exibicao))
+                                            tabela_centralizada(df_exibicao, width="content", hide_index=True, height=altura_tabela(df_exibicao), column_config=centralizar(df_exibicao))
                                             
                                             # ------------------------------------------------------------
                                             # Notas dos trimestres e média final ponderada
@@ -389,8 +462,7 @@ if menu_principal == "Consulta":
                                                 c_f3.metric("Trimestres Considerados", ", ".join(p.split()[0] for p in periodos_hist))
                                                 
                                                 config_final = {c: st.column_config.NumberColumn(c, format="%.1f") for c in df_final.columns if c not in ('Disciplina', 'Situação')}
-                                                config_final['Situação'] = st.column_config.TextColumn('Situação', width="large")
-                                                st.dataframe(df_final, use_container_width=True, hide_index=True, height=altura_tabela(df_final), column_config=config_final)
+                                                tabela_centralizada(df_final, width="content", hide_index=True, height=altura_tabela(df_final), column_config=centralizar(df_final, config_final))
                                             
                                             # Detalhes dos trimestres anteriores (expansível)
                                             periodos_anteriores = [p for p in periodos_hist if p < periodo_selecionado]
@@ -408,7 +480,7 @@ if menu_principal == "Consulta":
                                                                 'NOTA_FINAL': 'Nota Final'
                                                             })
                                                             config_ant = {c: st.column_config.NumberColumn(c, format="%.1f") for c in df_ant_exibicao.columns if c != 'Disciplina'}
-                                                            st.dataframe(df_ant_exibicao, use_container_width=True, hide_index=True, height=altura_tabela(df_ant_exibicao), column_config=config_ant)
+                                                            tabela_centralizada(df_ant_exibicao, width="content", hide_index=True, height=altura_tabela(df_ant_exibicao), column_config=centralizar(df_ant_exibicao, config_ant))
                                             
                                             st.markdown("---")
                                             alterar_notas = st.checkbox("Habilitar modo de edição e exclusão de notas")
@@ -468,6 +540,198 @@ if menu_principal == "Consulta":
             st.error(f"Erro ao carregar dados: {e}")
     else:
         st.info("Nenhum registro encontrado. Cadastre dados para começar.")
+
+# =========================================================================
+# MÓDULO 3: ANÁLISES E GRÁFICOS (AC4)
+# =========================================================================
+elif menu_principal == "Análises e Gráficos":
+    st.subheader("Análises Comparativas com Filtros e Gráficos")
+    
+    df_base = buscar_base_analise() if os.path.exists(DB_PATH) else pd.DataFrame()
+    
+    if df_base.empty:
+        st.info("Ainda não há notas cadastradas. Importe as planilhas no módulo Cadastro para gerar as análises.")
+    else:
+        df_base['SERIE'] = df_base['TURMA'].apply(extrair_serie)
+        
+        # ------------------------------------------------------------
+        # Filtros
+        # ------------------------------------------------------------
+        with st.expander("Filtros", expanded=True):
+            st.caption("Escolha os filtros desejados. Campo deixado em branco considera todas as opções.")
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                periodos_disp = sorted(df_base['PERIODO'].unique())
+                periodos_sel = st.multiselect("Trimestres:", periodos_disp, placeholder="Selecione os trimestres...")
+                
+                series_disp = sorted(df_base['SERIE'].unique())
+                series_sel = st.multiselect("Séries:", series_disp, placeholder="Selecione as séries...")
+            with col_f2:
+                series_para_turmas = series_sel if series_sel else series_disp
+                turmas_disp = sorted(df_base.loc[df_base['SERIE'].isin(series_para_turmas), 'TURMA'].unique())
+                turmas_sel = st.multiselect("Turmas:", turmas_disp, placeholder="Selecione as turmas...")
+                
+                componentes_disp = sorted(df_base['COMPONENTE'].unique())
+                componentes_sel = st.multiselect("Componentes Curriculares:", componentes_disp, placeholder="Selecione os componentes...")
+            
+            media_escola = float(st.session_state.params_avaliacao.get("media_minima", 6.0))
+            nota_corte = st.number_input("Nota de corte (média mínima):", min_value=0.0, max_value=10.0, value=media_escola, step=0.5, format="%.1f", key="corte_analise")
+        
+        nenhum_filtro = not (periodos_sel or series_sel or turmas_sel or componentes_sel)
+        
+        # Campo vazio = todas as opções daquele filtro
+        df_filtro = df_base[
+            df_base['PERIODO'].isin(periodos_sel if periodos_sel else periodos_disp)
+            & df_base['SERIE'].isin(series_para_turmas)
+            & df_base['TURMA'].isin(turmas_sel if turmas_sel else turmas_disp)
+            & df_base['COMPONENTE'].isin(componentes_sel if componentes_sel else componentes_disp)
+        ]
+        
+        if nenhum_filtro:
+            st.info("Selecione pelo menos um filtro acima (trimestre, série, turma ou componente) para gerar as análises e os gráficos.")
+        elif df_filtro.empty:
+            st.warning("Nenhum dado encontrado para os filtros selecionados. Ajuste os filtros acima.")
+        else:
+            # Indicadores gerais do filtro
+            c_i1, c_i2, c_i3, c_i4 = st.columns(4)
+            c_i1.metric("Média Geral", f"{df_filtro['NOTA_FINAL'].mean():.1f}")
+            c_i2.metric("Turmas", df_filtro['TURMA'].nunique())
+            c_i3.metric("Alunos", df_filtro['ALUNO_ID'].nunique())
+            perc_geral = (df_filtro['NOTA_FINAL'] < nota_corte).mean() * 100
+            c_i4.metric(f"Notas Abaixo de {nota_corte:.1f}", f"{perc_geral:.0f}%")
+            
+            aba1, aba2, aba3, aba4, aba5 = st.tabs([
+                "Turmas por Componente",
+                "Comparação entre Séries",
+                "Comparação entre Componentes",
+                "Evolução nos Trimestres",
+                "Dados Filtrados"
+            ])
+            
+            # ------------------------------------------------------------
+            # Aba 1: como cada turma se saiu em um componente
+            # ------------------------------------------------------------
+            with aba1:
+                st.markdown("##### Desempenho das Turmas em um Componente Curricular")
+                componentes_filtro = sorted(df_filtro['COMPONENTE'].unique())
+                comp_escolhido = st.selectbox("Componente:", componentes_filtro, index=None, placeholder="Selecione o componente...", key="comp_aba1")
+                
+                if comp_escolhido is None:
+                    st.info("Selecione um componente curricular para comparar as turmas.")
+                else:
+                    df_comp = df_filtro[df_filtro['COMPONENTE'] == comp_escolhido]
+                    resumo_comp = resumir_notas(df_comp, ['TURMA', 'PERIODO'], nota_corte)
+                
+                    pivot_comp = resumo_comp.pivot(index='TURMA', columns='PERIODO', values='MEDIA').rename_axis(index='Turma', columns='Trimestre')
+                    st.bar_chart(pivot_comp, stack=False, color=cores_para(len(pivot_comp.columns)), x_label="Turma", y_label="Média", height=420)
+                
+                    resumo_turma = resumir_notas(df_comp, ['TURMA'], nota_corte).sort_values('MEDIA', ascending=False)
+                    tabela_aba1 = resumo_turma[['TURMA', 'MEDIA', 'ALUNOS', 'PERC_ABAIXO']].rename(columns={
+                        'TURMA': 'Turma',
+                        'MEDIA': f'Média em {comp_escolhido}',
+                        'ALUNOS': 'Alunos',
+                        'PERC_ABAIXO': f'% Notas Abaixo de {nota_corte:.1f}'
+                    })
+                    st.dataframe(tabela_aba1, width="content", hide_index=True, height=altura_tabela(tabela_aba1), column_config=centralizar(tabela_aba1))
+                    if len(resumo_turma) > 1:
+                        melhor = resumo_turma.iloc[0]
+                        pior = resumo_turma.iloc[-1]
+                        st.caption(f"Maior média: **{melhor['TURMA']}** ({melhor['MEDIA']:.1f}) | Menor média: **{pior['TURMA']}** ({pior['MEDIA']:.1f}) | Diferença: **{melhor['MEDIA'] - pior['MEDIA']:.1f}** ponto(s).")
+            
+            # ------------------------------------------------------------
+            # Aba 2: comparação entre séries
+            # ------------------------------------------------------------
+            with aba2:
+                st.markdown("##### Média por Série em Cada Trimestre")
+                st.caption("Considera os componentes e turmas selecionados nos filtros. Turmas da mesma série são agrupadas.")
+                resumo_serie = resumir_notas(df_filtro, ['SERIE', 'PERIODO'], nota_corte)
+                pivot_serie = resumo_serie.pivot(index='SERIE', columns='PERIODO', values='MEDIA').rename_axis(index='Série', columns='Trimestre')
+                st.bar_chart(pivot_serie, stack=False, color=cores_para(len(pivot_serie.columns)), x_label="Série", y_label="Média", height=420)
+                
+                tabela_serie = pivot_serie.reset_index()
+                resumo_serie_total = resumir_notas(df_filtro, ['SERIE'], nota_corte)
+                tabela_serie['Média no Período Filtrado'] = resumo_serie_total.set_index('SERIE').loc[tabela_serie['Série'], 'MEDIA'].values
+                tabela_serie['Turmas'] = df_filtro.groupby('SERIE')['TURMA'].nunique().loc[tabela_serie['Série']].values
+                tabela_serie[f'% Notas Abaixo de {nota_corte:.1f}'] = resumo_serie_total.set_index('SERIE').loc[tabela_serie['Série'], 'PERC_ABAIXO'].values
+                config_serie = {c: st.column_config.NumberColumn(c, format="%.1f") for c in list(pivot_serie.columns) + ['Média no Período Filtrado']}
+                st.dataframe(tabela_serie, width="content", hide_index=True, height=altura_tabela(tabela_serie), column_config=centralizar(tabela_serie, config_serie))
+            
+            # ------------------------------------------------------------
+            # Aba 3: comparação entre componentes
+            # ------------------------------------------------------------
+            with aba3:
+                st.markdown("##### Média por Componente Curricular nas Turmas Selecionadas")
+                st.caption("Use os filtros para escolher as turmas e os trimestres. Cada cor representa uma turma.")
+                resumo_comp_turma = resumir_notas(df_filtro, ['COMPONENTE', 'TURMA'], nota_corte)
+                pivot_comp_turma = resumo_comp_turma.pivot(index='COMPONENTE', columns='TURMA', values='MEDIA').rename_axis(index='Componente', columns='Turma')
+                st.bar_chart(
+                    pivot_comp_turma,
+                    stack=False,
+                    horizontal=True,
+                    color=cores_para(len(pivot_comp_turma.columns)),
+                    x_label="Componente",
+                    y_label="Média",
+                    height=max(400, 18 * len(pivot_comp_turma) * len(pivot_comp_turma.columns) + 80)
+                )
+                
+                tabela_comp = pivot_comp_turma.reset_index()
+                tabela_comp['Média Geral'] = pivot_comp_turma.mean(axis=1).round(1).values
+                tabela_comp = tabela_comp.sort_values('Média Geral', ascending=False)
+                config_comp = {c: st.column_config.NumberColumn(c, format="%.1f") for c in tabela_comp.columns if c != 'Componente'}
+                st.dataframe(tabela_comp, width="content", hide_index=True, height=altura_tabela(tabela_comp), column_config=centralizar(tabela_comp, config_comp))
+            
+            # ------------------------------------------------------------
+            # Aba 4: evolução ao longo dos trimestres
+            # ------------------------------------------------------------
+            with aba4:
+                st.markdown("##### Evolução da Média ao Longo dos Trimestres")
+                opcoes_evol = ["Todos os componentes filtrados"] + sorted(df_filtro['COMPONENTE'].unique())
+                comp_evol = st.selectbox("Componente:", opcoes_evol, key="comp_evol")
+                df_evol = df_filtro if comp_evol == "Todos os componentes filtrados" else df_filtro[df_filtro['COMPONENTE'] == comp_evol]
+                
+                resumo_evol = resumir_notas(df_evol, ['PERIODO', 'TURMA'], nota_corte)
+                pivot_evol = resumo_evol.pivot(index='PERIODO', columns='TURMA', values='MEDIA').rename_axis(index='Trimestre', columns='Turma')
+                
+                if len(pivot_evol) < 2:
+                    st.info("Selecione pelo menos dois trimestres nos filtros para ver a evolução.")
+                st.line_chart(pivot_evol, color=cores_para(len(pivot_evol.columns)), x_label="Trimestre", y_label="Média", height=420)
+                
+                tabela_evol = pivot_evol.T.reset_index()
+                periodos_evol = list(pivot_evol.index)
+                if len(periodos_evol) > 1:
+                    tabela_evol['Variação (1º ao último)'] = (tabela_evol[periodos_evol[-1]] - tabela_evol[periodos_evol[0]]).round(1)
+                config_evol = {c: st.column_config.NumberColumn(c, format="%.1f") for c in periodos_evol}
+                config_evol['Variação (1º ao último)'] = st.column_config.NumberColumn('Variação (1º ao último)', format="%+.1f")
+                st.dataframe(tabela_evol, width="content", hide_index=True, height=altura_tabela(tabela_evol), column_config=centralizar(tabela_evol, config_evol))
+                st.caption("Turmas que não têm notas em algum trimestre aparecem com o valor em branco.")
+            
+            # ------------------------------------------------------------
+            # Aba 5: dados filtrados e exportação
+            # ------------------------------------------------------------
+            with aba5:
+                st.markdown("##### Resumo dos Dados Filtrados")
+                resumo_geral = resumir_notas(df_filtro, ['PERIODO', 'SERIE', 'TURMA', 'COMPONENTE'], nota_corte)
+                tabela_geral = resumo_geral[['PERIODO', 'SERIE', 'TURMA', 'COMPONENTE', 'MEDIA', 'ALUNOS', 'ABAIXO', 'PERC_ABAIXO']].rename(columns={
+                    'PERIODO': 'Trimestre',
+                    'SERIE': 'Série',
+                    'TURMA': 'Turma',
+                    'COMPONENTE': 'Componente',
+                    'MEDIA': 'Média',
+                    'ALUNOS': 'Alunos',
+                    'ABAIXO': f'Alunos Abaixo de {nota_corte:.1f}',
+                    'PERC_ABAIXO': '% Abaixo'
+                })
+                st.dataframe(tabela_geral, width="content", hide_index=True, height=min(altura_tabela(tabela_geral), 700),
+                             column_config=centralizar(tabela_geral, {'Média': st.column_config.NumberColumn('Média', format="%.1f")}))
+                st.caption(f"{len(tabela_geral)} linha(s).")
+                
+                csv_dados = tabela_geral.to_csv(index=False, sep=';', decimal=',').encode('utf-8-sig')
+                st.download_button(
+                    "Baixar dados filtrados (CSV para Excel)",
+                    data=csv_dados,
+                    file_name="analise_desempenho_filtrada.csv",
+                    mime="text/csv"
+                )
 
 # =========================================================================
 # MÓDULO 2: CADASTRO E LANÇAMENTOS
@@ -718,7 +982,7 @@ elif menu_principal == "Cadastro":
                         "Motivo da Inconsistência": st.column_config.TextColumn("Motivo da Inconsistência", disabled=True),
                     },
                     hide_index=True,
-                    use_container_width=True,
+                    width="stretch",
                     key="tabela_itens_com_erro"
                 )
             else:
@@ -896,7 +1160,7 @@ elif menu_principal == "Cadastro":
                         "Trimestral": st.column_config.TextColumn("Trimestral"),
                     },
                     hide_index=True,
-                    use_container_width=True,
+                    width="stretch",
                     key="editor_notas_lote"
                 )
                 
@@ -1084,7 +1348,7 @@ elif menu_principal == "Cadastro":
                 'QTD_ALUNOS': 'Qtd. Alunos',
                 'TRIMESTRES': 'Trimestres com Notas'
             })
-            st.dataframe(df_turmas_exibicao, use_container_width=True, hide_index=True, height=altura_tabela(df_turmas_exibicao))
+            st.dataframe(df_turmas_exibicao, width="content", hide_index=True, height=altura_tabela(df_turmas_exibicao), column_config=centralizar(df_turmas_exibicao))
             
             lista_turmas_corrigir = ["Selecione..."] + list(df_turmas_resumo['TURMA'])
             turma_corrigir = st.selectbox("Turma que será corrigida:", lista_turmas_corrigir, key="turma_corrigir")
