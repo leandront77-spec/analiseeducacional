@@ -398,6 +398,25 @@ def renomear_ou_unir_turma(turma_origem_id, novo_nome):
     conexao.close()
     return "unida"
 
+def buscar_base_analise():
+    """Retorna todas as notas finais com período, turma e disciplina (base para os filtros e gráficos da AC4)."""
+    conexao = obter_conexao()
+    query = """
+        SELECT 
+            n.periodo AS PERIODO,
+            t.nome_turma AS TURMA,
+            d.nome_disciplina AS COMPONENTE,
+            a.id AS ALUNO_ID,
+            n.nota_final AS NOTA_FINAL
+        FROM notas n
+        JOIN alunos a ON n.aluno_id = a.id
+        JOIN turmas t ON a.turma_id = t.id
+        JOIN disciplinas d ON n.disciplina_id = d.id
+    """
+    df = pd.read_sql_query(query, conexao)
+    conexao.close()
+    return df
+
 def deletar_banco():
     """Apaga as tabelas do banco (evita erro de arquivo em uso no Windows)."""
     conexao = obter_conexao()
