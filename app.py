@@ -1,3 +1,4 @@
+# Painel de Desempenho Escolar - versão final (AC4)
 import io
 import re
 import streamlit as st
